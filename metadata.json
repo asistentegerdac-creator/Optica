@@ -1,0 +1,6 @@
+{
+  "name": "OptiVision",
+  "description": "Sistema profesional de gestión integral para clínicas oftalmológicas y ópticas comerciales, con control de inventario, cotizaciones, recetas, historial clínico y ventas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
