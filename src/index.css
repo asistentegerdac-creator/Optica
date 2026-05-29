@@ -21,15 +21,19 @@
   font-family: "Outfit", sans-serif !important;
 }
 
-/* User font-size scaling helper */
-.size-theme-normal {
-  font-size: 100%;
+/* User font-size scaling helper at root html level */
+html.size-theme-normal, .size-theme-normal {
+  font-size: 15px !important;
 }
-.size-theme-large {
-  font-size: 110%;
+html.size-theme-large, .size-theme-large {
+  font-size: 18.5px !important;
 }
-.size-theme-xlarge {
-  font-size: 122%;
+html.size-theme-xlarge, .size-theme-xlarge {
+  font-size: 21px !important;
+}
+
+body {
+  transition: font-size 0.2s ease;
 }
 
 @layer utilities {

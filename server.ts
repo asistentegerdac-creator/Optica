@@ -450,6 +450,27 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
+// DELETE User
+app.delete("/api/users/:username", async (req, res) => {
+  const { username } = req.params;
+  const uNameLower = username.toLowerCase().trim();
+  if (uNameLower === 'admin') {
+    return res.status(400).json({ error: "No es posible eliminar el usuario administrador maestro local ('admin')." });
+  }
+
+  if (dbPool && !connectionError) {
+    try {
+      await dbPool.query("DELETE FROM users WHERE LOWER(username) = $1", [uNameLower]);
+      res.json({ success: true, message: `Usuario ${uNameLower} eliminado de PostgreSQL.` });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  } else {
+    fallbackUsers = fallbackUsers.filter(u => u.username !== uNameLower);
+    res.json({ success: true, message: `Usuario ${uNameLower} eliminado de la memoria fallback.` });
+  }
+});
+
 // ──────────────────────────────────────────────────────────────────
 // QUOTES APIs
 // ──────────────────────────────────────────────────────────────────

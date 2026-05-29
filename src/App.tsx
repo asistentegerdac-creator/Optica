@@ -32,7 +32,7 @@ import {
   Activity, Sparkles, Calendar, Tag, Gift as GiftIcon, FileText, Check, 
   ChevronRight, AlertTriangle, Phone, Mail, MapPin, X, Bell, CheckCircle2,
   PhoneCall, MessageSquare, Award, Clock, ArrowRight, ClipboardList, Trash2, HeartHandshake,
-  Database
+  Database, Edit
 } from 'lucide-react';
 
 export default function App() {
@@ -74,7 +74,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   });
 
-  const [themeColor, setThemeColor] = useState<'indigo' | 'emerald' | 'amber' | 'rose' | 'slate'>(() => {
+  const [themeColor, setThemeColor] = useState<'indigo' | 'emerald' | 'amber' | 'rose' | 'slate' | 'sky'>(() => {
     const saved = localStorage.getItem('theme_color');
     return (saved as any) || 'indigo';
   });
@@ -88,6 +88,30 @@ export default function App() {
     const saved = localStorage.getItem('theme_font_size');
     return (saved as any) || 'normal';
   });
+
+  // State for editing quote ID (replaces random ID with existing ID for updates)
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
+  const [editingQuoteNumber, setEditingQuoteNumber] = useState<string | null>(null);
+
+  // States for Date Range History Report
+  const [reportStartDate, setReportStartDate] = useState<string>(() => {
+    const d = new Date();
+    // Default to the first day of current month
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+  });
+  const [reportEndDate, setReportEndDate] = useState<string>(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+  const [reportStatusFilter, setReportStatusFilter] = useState<string>('Todos');
+
+  // Admin section: states for listing and registering users inside config tab
+  const [registeredUsers, setRegisteredUsers] = useState<any[]>([]);
+  const [adminRegisterUsername, setAdminRegisterUsername] = useState('');
+  const [adminRegisterPassword, setAdminRegisterPassword] = useState('');
+  const [adminRegisterFullName, setAdminRegisterFullName] = useState('');
+  const [adminRegisterRole, setAdminRegisterRole] = useState<'Administrador' | 'Vendedor'>('Vendedor');
+  const [adminRegisterError, setAdminRegisterError] = useState<string | null>(null);
+  const [adminRegisterSuccess, setAdminRegisterSuccess] = useState<string | null>(null);
 
   // Stateful dynamic catalogs fetched from Postgres DB or fallbacks
   const [frames, setFrames] = useState<FrameTemplate[]>(mockFrames);
@@ -122,8 +146,8 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
 
-  // Subsettings state inside Database layout: 'postgres' | 'catalogs' | 'theme'
-  const [dbSubTab, setDbSubTab] = useState<'postgres' | 'catalogs' | 'theme'>('postgres');
+  // Subsettings state inside Database layout: 'postgres' | 'catalogs' | 'theme' | 'users'
+  const [dbSubTab, setDbSubTab] = useState<'postgres' | 'catalogs' | 'theme' | 'users'>('postgres');
 
   // Navigation
   // Tabs: 'dashboard' | 'cotizador' | 'crm' | 'database'
@@ -243,6 +267,17 @@ export default function App() {
       const remindersRes = await fetch('/api/reminders');
       const remindersData = await remindersRes.json();
       setReminders(remindersData);
+
+      // Fetch list of registered users for admin console
+      try {
+        const usersRes = await fetch('/api/users');
+        if (usersRes.ok) {
+          const usersData = await usersRes.json();
+          setRegisteredUsers(usersData);
+        }
+      } catch (err) {
+        console.warn("Could not fetch users, falling back:", err);
+      }
     } catch (e) {
       console.warn("API Fetch error, utilizing Client state fallback:", e);
       // Fallbacks
@@ -852,10 +887,12 @@ export default function App() {
       return;
     }
 
+    const oldQuote = editingQuoteId ? quotes.find(q => q.id === editingQuoteId) : null;
+
     const newQuote: Quote = {
-      id: `cot-${Date.now()}`,
-      quoteNumber: `COT-2026-0${quotes.length + 1}`,
-      date: new Date().toISOString(),
+      id: editingQuoteId || `cot-${Date.now()}`,
+      quoteNumber: editingQuoteNumber || `COT-2026-0${quotes.length + 1}`,
+      date: oldQuote ? oldQuote.date : new Date().toISOString(),
       
       clientName,
       clientDni,
@@ -907,8 +944,17 @@ export default function App() {
       validDays,
       estimatedDeliveryDate: estimatedDeliveryDate || new Date(Date.now() + 3*24*60*60*1000).toISOString().split('T')[0],
 
-      status: 'Nuevo',
-      crmNotes: [
+      status: oldQuote ? oldQuote.status : 'Nuevo',
+      crmNotes: oldQuote ? [
+        ...oldQuote.crmNotes,
+        {
+          id: `crm-note-edit-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          user: currentUser,
+          details: `Proforma actualizada por edición. Monto reajustado a S/ ${totalPrice.toFixed(2)}.`,
+          interactionType: 'Otro'
+        }
+      ] : [
         {
           id: `crm-note-${Date.now()}`,
           timestamp: new Date().toISOString(),
@@ -917,13 +963,18 @@ export default function App() {
           interactionType: 'Otro'
         }
       ],
-      nextContactDate: new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], // 2 days follow up suggested
-      nextActionNotes: "Escribir recordándole la cotización de lunas oftálmicas."
+      nextContactDate: oldQuote ? oldQuote.nextContactDate : new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], // 2 days follow up suggested
+      nextActionNotes: oldQuote ? oldQuote.nextActionNotes : "Escribir recordándole la cotización de lunas oftálmicas."
     };
 
     // Optimistically update locally
-    setQuotes(prev => [newQuote, ...prev]);
-    addLog("Guardar Cotización", `Se guardó la cotización ${newQuote.quoteNumber} para ${newQuote.clientName} por S/ ${newQuote.total.toFixed(2)}.`);
+    setQuotes(prev => editingQuoteId ? prev.map(q => q.id === editingQuoteId ? newQuote : q) : [newQuote, ...prev]);
+    
+    if (editingQuoteId) {
+      addLog("Actualizar Cotización", `Se actualizó la cotización existente ${newQuote.quoteNumber} para ${newQuote.clientName} por un monto total de S/ ${newQuote.total.toFixed(2)}.`);
+    } else {
+      addLog("Guardar Cotización", `Se guardó la cotización ${newQuote.quoteNumber} para ${newQuote.clientName} por S/ ${newQuote.total.toFixed(2)}.`);
+    }
 
     // Persistent save through Express API
     try {
@@ -940,6 +991,10 @@ export default function App() {
 
     // Open print Document immediately
     setPrintQuote(newQuote);
+
+    // Clear editing states
+    setEditingQuoteId(null);
+    setEditingQuoteNumber(null);
 
     // Clear quote inputs to prevent dirty repeats
     setClientName('');
@@ -977,6 +1032,80 @@ export default function App() {
 
     // Go to CRM tab
     setCurrentTab('crm');
+  };
+
+  // Load an existing proforma into states to modify and rewrite (UPSERT)
+  const handleLoadQuoteForEdit = (q: Quote) => {
+    setEditingQuoteId(q.id);
+    setEditingQuoteNumber(q.quoteNumber);
+    
+    setClientName(q.clientName || '');
+    setClientDni(q.clientDni || '');
+    setClientPhone(q.clientPhone || '');
+    setClientEmail(q.clientEmail || '');
+    setClientAddress(q.clientAddress || '');
+    
+    setHasPrescription(q.hasPrescription || false);
+    if (q.od) {
+      setOdSphere(q.od.sphere || '0.00');
+      setOdCylinder(q.od.cylinder || '0.00');
+      setOdAxis(q.od.axis || '0°');
+      setOdAddition(q.od.addition || '0.00');
+      setOdDip(q.od.dip || '0.0');
+    }
+    if (q.oi) {
+      setOiSphere(q.oi.sphere || '0.00');
+      setOiCylinder(q.oi.cylinder || '0.00');
+      setOiAxis(q.oi.axis || '0°');
+      setOiAddition(q.oi.addition || '0.00');
+      setOiDip(q.oi.dip || '0.0');
+    }
+    setLensType(q.lensType as any || 'Monofocal');
+    setDoctorName(q.doctorName || '');
+    
+    // Check preset matching for Frames
+    const matchingFrame = frames.find(f => 
+      f.brand.toLowerCase() === q.frameBrand?.toLowerCase() && 
+      f.model.toLowerCase() === q.frameModel?.toLowerCase()
+    );
+    if (matchingFrame) {
+      setFrameInputMode('preset');
+      setSelectedFramePresetId(matchingFrame.id);
+    } else {
+      setFrameInputMode('custom');
+      setCustomFrameBrand(q.frameBrand || '');
+      setCustomFrameModel(q.frameModel || '');
+      setCustomFrameColor(q.frameColor || '');
+      setCustomFrameMaterial(q.frameMaterial || '');
+      setCustomFramePrice(q.framePrice || 0);
+    }
+    
+    // Check preset matching for Crystals
+    const matchingCrystal = crystals.find(c => 
+      c.brand.toLowerCase() === q.crystalBrand?.toLowerCase() && 
+      c.type.toLowerCase() === q.crystalType?.toLowerCase()
+    );
+    if (matchingCrystal) {
+      setCrystalInputMode('preset');
+      setSelectedCrystalPresetId(matchingCrystal.id);
+    } else {
+      setCrystalInputMode('custom');
+      setCustomCrystalBrand(q.crystalBrand || '');
+      setCustomCrystalType(q.crystalType as any || 'Monofocal');
+      setCustomCrystalMaterial(q.crystalMaterial || '');
+      setCustomCrystalPrice(q.crystalPrice || 0);
+    }
+    
+    setSelectedTreatments(q.selectedTreatments || []);
+    setSelectedGifts(q.selectedGifts || []);
+    setDiscountType(q.discountType || 'percentage');
+    setDiscountValue(q.discountValue || 0);
+    setObservations(q.observations || '');
+    setEstimatedDeliveryDate(q.estimatedDeliveryDate || '');
+    
+    setCurrentTab('cotizador');
+    
+    addLog("Iniciar Edición", `Cargando proforma ${q.quoteNumber} para reajuste de datos en la planilla.`);
   };
 
   // 6. Inline CRM Actions note additions
@@ -1114,6 +1243,28 @@ export default function App() {
       followUpAlerts
     };
   }, [quotes]);
+
+  // Memoized lists of quotes filtering by user chosen date range selection
+  const reportQuotes = useMemo(() => {
+    return quotes.filter(q => {
+      const qDate = q.date ? q.date.split('T')[0] : '';
+      const matchDate = (reportStartDate === '' || qDate >= reportStartDate) && 
+                        (reportEndDate === '' || qDate <= reportEndDate);
+      const matchStatus = reportStatusFilter === 'Todos' || q.status === reportStatusFilter;
+      return matchDate && matchStatus;
+    });
+  }, [quotes, reportStartDate, reportEndDate, reportStatusFilter]);
+
+  const reportMetrics = useMemo(() => {
+    const listCount = reportQuotes.length;
+    const total = reportQuotes.reduce((sum, q) => sum + (q.total || 0), 0);
+    const totalWonSum = reportQuotes.filter(q => q.status === 'Aceptado / Ganado').reduce((sum, q) => sum + (q.total || 0), 0);
+    const totalPendingSum = reportQuotes.filter(q => q.status === 'En Seguimiento').reduce((sum, q) => sum + (q.total || 0), 0);
+    const wonCount = reportQuotes.filter(q => q.status === 'Aceptado / Ganado').length;
+    const convRate = listCount > 0 ? (wonCount / listCount) * 100 : 0;
+    
+    return { total, totalWonSum, totalPendingSum, convRate };
+  }, [reportQuotes]);
 
   // Aggregate daily records for recharts AreaGraph
   const dailyChartData = useMemo(() => {
@@ -1773,12 +1924,245 @@ export default function App() {
                 )}
               </div>
 
+              {/* ──────────────────────────────────────────────────────────────────
+                  HISTORIAL DE COTIZACIONES Y REPORTE ESTADÍSTICO POR FECHAS (ÓPTICA DAC)
+                  ────────────────────────────────────────────────────────────────── */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-6 select-none shadow-xs">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-4 gap-2">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-black tracking-widest text-sky-600 block font-mono uppercase">MÓDULO DE AUDITORÍA</span>
+                    <h3 className="text-sm font-extrabold text-slate-800 flex items-center gap-1.5 uppercase font-mono tracking-wider">
+                      <FileText className="w-4 h-4 text-sky-500 shrink-0" />
+                      Reporte Histórico y Filtro por Rango de Fechas
+                    </h3>
+                    <p className="text-xs text-slate-500 font-light">Especifique un rango de fecha para generar estadísticas precisas y el ledger de proformas correspondientes a Óptica Dac.</p>
+                  </div>
+                  
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.print();
+                    }}
+                    className="px-3.5 py-2 border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-extrabold text-[10px] rounded-xl uppercase flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Imprimir Reporte Rango
+                  </button>
+                </div>
+
+                {/* Filter Controls block */}
+                <div className="grid grid-cols-4 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-250">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-wide">Fecha de Inicio</label>
+                    <input 
+                      type="date" 
+                      value={reportStartDate} 
+                      onChange={(e) => setReportStartDate(e.target.value)}
+                      className="w-full text-xs p-2 bg-white border border-slate-200 rounded-lg text-slate-800 font-medium focus:border-sky-500 focus:outline-hidden"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-wide">Fecha de Fin</label>
+                    <input 
+                      type="date" 
+                      value={reportEndDate} 
+                      onChange={(e) => setReportEndDate(e.target.value)}
+                      className="w-full text-xs p-2 bg-white border border-slate-200 rounded-lg text-slate-800 font-medium focus:border-sky-500 focus:outline-hidden"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-wide">Filtrar por Estado</label>
+                    <select 
+                      value={reportStatusFilter}
+                      onChange={(e) => setReportStatusFilter(e.target.value)}
+                      className="w-full text-xs p-2 bg-white border border-slate-200 rounded-lg text-slate-800 font-medium focus:border-sky-500 focus:outline-hidden"
+                    >
+                      <option value="Todos">Todos los Estados</option>
+                      <option value="Nuevo">Nuevos</option>
+                      <option value="En Seguimiento">En Seguimiento</option>
+                      <option value="Aceptado / Ganado">Aceptado / Ganado</option>
+                      <option value="Rechazado">Rechazados</option>
+                      <option value="Cancelado">Cancelados</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <div className="w-full bg-sky-50/50 p-2 text-sky-850 rounded-lg border border-sky-100 text-center font-mono text-[10px] font-black uppercase">
+                      📌 {reportQuotes.length} Coincidencias en Rango
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ledger Metrics Breakdown */}
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-0.5">
+                    <span className="text-[9px] uppercase font-bold text-slate-400 block font-mono">Emisiones Registradas</span>
+                    <strong className="text-xl font-mono text-slate-800 font-black">{reportQuotes.length} planillas</strong>
+                  </div>
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-0.5">
+                    <span className="text-[9px] uppercase font-bold text-slate-400 block font-mono">Total Cotizado</span>
+                    <strong className="text-xl font-mono text-slate-800 font-black">S/ {reportMetrics.total.toFixed(2)}</strong>
+                  </div>
+                  <div className="p-4 bg-emerald-50/70 border border-emerald-150 rounded-xl space-y-0.5 animate-fade-in">
+                    <span className="text-[9px] uppercase font-bold text-emerald-600 block font-mono">Monto Ganado (Aceptado)</span>
+                    <strong className="text-xl font-mono text-emerald-800 font-black font-extrabold">S/ {reportMetrics.totalWonSum.toFixed(2)}</strong>
+                  </div>
+                  <div className="p-4 bg-indigo-50 border border-indigo-150 rounded-xl space-y-0.5">
+                    <span className="text-[9px] uppercase font-bold text-indigo-600 block font-mono">Tasa Conversión Rango</span>
+                    <strong className="text-xl font-mono text-indigo-850 font-black">{reportMetrics.convRate.toFixed(1)}%</strong>
+                  </div>
+                </div>
+
+                {/* Ledger Listings Document Table */}
+                <div className="border border-slate-200 rounded-xl overflow-x-auto shadow-xs select-text">
+                  <table className="w-full text-left font-sans text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-150 text-slate-500 font-mono text-[9px] font-black uppercase tracking-wide">
+                        <th className="p-3">Proforma / Fecha</th>
+                        <th className="p-3">Paciente / DNI</th>
+                        <th className="p-3 font-mono text-center">Celular CRM</th>
+                        <th className="p-3">Monturas y Aros</th>
+                        <th className="p-3">Lunas Oftálmicas</th>
+                        <th className="p-3 text-right">Monto Total</th>
+                        <th className="p-3 text-center">Estado</th>
+                        <th className="p-3 text-center">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-150 text-slate-700">
+                      {reportQuotes.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="p-12 text-center text-slate-400 italic text-xs font-light bg-slate-50/20">
+                            No se encuentran proformas emitidas en el rango de fechas seleccionado ({reportStartDate} al {reportEndDate}).
+                          </td>
+                        </tr>
+                      ) : (
+                        reportQuotes.map(q => (
+                          <tr key={q.id} className="hover:bg-slate-50/40 text-slate-700 transition-colors">
+                            <td className="p-3 font-mono">
+                              <span className="font-extrabold text-slate-900 block leading-none">{q.quoteNumber}</span>
+                              <span className="text-[9px] text-slate-400 block mt-0.5">{new Date(q.date).toLocaleDateString('es-PE')}</span>
+                            </td>
+                            <td className="p-3">
+                              <span className="uppercase text-[10.5px] font-extrabold text-slate-900 block leading-tight">{q.clientName}</span>
+                              {q.clientDni && <span className="font-mono text-[9px] text-slate-450 block font-bold">DNI: {q.clientDni}</span>}
+                            </td>
+                            <td className="p-3 text-center font-mono font-bold text-slate-650 text-[10.5px]">
+                              {q.clientPhone ? q.clientPhone : <span className="text-slate-300 italic">-</span>}
+                            </td>
+                            <td className="p-3 uppercase text-[9.5px]">
+                              <span className="block font-bold text-slate-850">{q.frameBrand || "Solo cristales"}</span>
+                              <span className="text-[9px] text-slate-400 block font-light">{q.frameModel || "Sin aro"}</span>
+                            </td>
+                            <td className="p-3 uppercase text-[9.5px]">
+                              <span className="block font-bold text-slate-850">{q.crystalBrand || "Sin Lunas"}</span>
+                              <span className="text-[9px] text-indigo-500 font-bold block">{q.lensType}</span>
+                            </td>
+                            <td className="p-3 text-right font-mono font-black text-slate-950 text-[11.5px]">
+                              S/ {q.total.toFixed(2)}
+                            </td>
+                            <td className="p-3 text-center font-bold">
+                              <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded border inline-block ${
+                                q.status === 'Nuevo' ? 'bg-sky-50 text-sky-800 border-sky-150' :
+                                q.status === 'En Seguimiento' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                                q.status === 'Aceptado / Ganado' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
+                                q.status === 'Rechazado' ? 'bg-rose-150 text-rose-800 border-rose-250' :
+                                'bg-slate-100 text-slate-500 border-slate-200'
+                              }`}>
+                                {q.status === 'Aceptado / Ganado' ? 'Ganada' : q.status}
+                              </span>
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="inline-flex gap-1.5 justify-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleLoadQuoteForEdit(q)}
+                                  className="p-1 hover:bg-slate-100 rounded text-indigo-600 border border-slate-200 cursor-pointer"
+                                  title="Editar Proforma"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPrintQuote(q)}
+                                  className="p-1 hover:bg-slate-100 rounded text-slate-500 border border-slate-200 cursor-pointer"
+                                  title="Imprimir formatos"
+                                >
+                                  <Printer className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+              </div>
+
             </div>
           )}
 
           {/* B. EXPRESS QUOTES GENERATOR TAB */}
           {currentTab === 'cotizador' && (
-            <form onSubmit={handleSaveQuote} className="grid grid-cols-3 gap-6 animate-fade-in text-left">
+            <div className="space-y-4 animate-fade-in text-left">
+              {editingQuoteId && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex-shrink-0 flex items-center justify-center w-6 h-6 bg-amber-500 rounded-full text-white text-xs font-black">!</span>
+                    <div>
+                      <p className="text-xs text-amber-900 font-bold leading-normal">
+                        📝 MODO DE EDICIÓN ACTIVO: Modificando la proforma <strong className="font-mono bg-white border border-amber-250 px-2 py-0.5 rounded text-amber-950 font-black">{editingQuoteNumber}</strong>.
+                      </p>
+                      <p className="text-[10px] text-amber-600 font-normal">
+                        Al completar el reajuste y dar guardar, se actualizará el registro correspondiente en la base de datos de Óptica Dac conservando el historial.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingQuoteId(null);
+                      setEditingQuoteNumber(null);
+                      setClientName('');
+                      setClientDni('');
+                      setClientPhone('');
+                      setClientEmail('');
+                      setClientAddress('');
+                      setHasPrescription(false);
+                      setOdSphere('0.00');
+                      setOdCylinder('0.00');
+                      setOdAxis('0°');
+                      setOdAddition('0.00');
+                      setOdDip('0.0');
+                      setOiSphere('0.00');
+                      setOiCylinder('0.00');
+                      setOiAxis('0°');
+                      setOiAddition('0.00');
+                      setOiDip('0.0');
+                      setLensType('Monofocal');
+                      setDoctorName('');
+                      setCustomFrameBrand('');
+                      setCustomFrameModel('');
+                      setCustomFrameColor('');
+                      setCustomFrameMaterial('');
+                      setCustomFramePrice(0);
+                      setCustomCrystalBrand('');
+                      setCustomCrystalType('Monofocal');
+                      setCustomCrystalMaterial('');
+                      setCustomCrystalPrice(0);
+                      setSelectedTreatments([]);
+                      setSelectedGifts([]);
+                      setDiscountValue(0);
+                      setObservations('');
+                      setEstimatedDeliveryDate('');
+                      addLog("Cancelar Edición", "Edición de proforma cancelada por el usuario.");
+                    }}
+                    className="text-[10px] bg-amber-600 hover:bg-amber-700 text-white font-black uppercase px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Cancelar Edición
+                  </button>
+                </div>
+              )}
+              <form onSubmit={handleSaveQuote} className="grid grid-cols-3 gap-6">
               
               {/* Left Column Span 2: Client, Rx, and Products configuration */}
               <div className="col-span-2 space-y-6">
@@ -2457,9 +2841,10 @@ export default function App() {
 
               </div>
             </form>
-          )}
+          </div>
+        )}
 
-          {/* C. CRM FOLLOW-UP & QUOTES LIST TAB */}
+        {/* C. CRM FOLLOW-UP & QUOTES LIST TAB */}
           {currentTab === 'crm' && (
             <div className="space-y-6 animate-fade-in text-left">
               
@@ -2582,6 +2967,16 @@ export default function App() {
                             </td>
                             <td className="p-3.5 text-right">
                               <div className="flex justify-end gap-1.5 items-center">
+                                {/* Edit Quote launch button */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleLoadQuoteForEdit(q)}
+                                  className="p-1.5 hover:bg-slate-100 rounded text-indigo-600 cursor-pointer border border-slate-200"
+                                  title="Editar Proforma / Datos"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+
                                 {/* Print A4/Ticket launch button */}
                                 <button
                                   type="button"
@@ -2919,6 +3314,17 @@ export default function App() {
               }`}
             >
               🎨 Temas, Fuentes y Letra
+            </button>
+
+            <button
+              onClick={() => setDbSubTab('users')}
+              className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                dbSubTab === 'users'
+                  ? `${theme.primary} border-current ${theme.text} font-black`
+                  : 'border-transparent text-slate-400 hover:text-slate-755'
+              }`}
+            >
+              👥 Gestión de Usuarios
             </button>
           </div>
 
