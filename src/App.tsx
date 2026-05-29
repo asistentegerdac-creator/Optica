@@ -68,11 +68,78 @@ export default function App() {
   const [customGifts, setCustomGifts] = useState<string[]>([]);
   const [newGiftName, setNewGiftName] = useState('');
 
+  // 1.5 Authentic Logged Session Tracker & Visual Customizers
+  const [loggedUser, setLoggedUser] = useState<{ username: string; fullName: string; role: string } | null>(() => {
+    const saved = localStorage.getItem('logged_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [themeColor, setThemeColor] = useState<'indigo' | 'emerald' | 'amber' | 'rose' | 'slate'>(() => {
+    const saved = localStorage.getItem('theme_color');
+    return (saved as any) || 'indigo';
+  });
+
+  const [themeFont, setThemeFont] = useState<'sans' | 'grotesk' | 'serif' | 'outfit'>(() => {
+    const saved = localStorage.getItem('theme_font');
+    return (saved as any) || 'sans';
+  });
+
+  const [themeFontSize, setThemeFontSize] = useState<'normal' | 'large' | 'xlarge'>(() => {
+    const saved = localStorage.getItem('theme_font_size');
+    return (saved as any) || 'normal';
+  });
+
+  // Stateful dynamic catalogs fetched from Postgres DB or fallbacks
+  const [frames, setFrames] = useState<FrameTemplate[]>(mockFrames);
+  const [crystals, setCrystals] = useState<CrystalTemplate[]>(mockCrystals);
+  const [reminders, setReminders] = useState<any[]>([]);
+
+  // States for interactive custom catalog editor form
+  const [newFrameBrand, setNewFrameBrand] = useState('');
+  const [newFrameModel, setNewFrameModel] = useState('');
+  const [newFrameMaterial, setNewFrameMaterial] = useState('');
+  const [newFrameColor, setNewFrameColor] = useState('');
+  const [newFramePrice, setNewFramePrice] = useState<number>(0);
+
+  const [newCrystalBrand, setNewCrystalBrand] = useState('');
+  const [newCrystalType, setNewCrystalType] = useState<any>('Monofocal');
+  const [newCrystalMaterial, setNewCrystalMaterial] = useState('');
+  const [newCrystalPrice, setNewCrystalPrice] = useState<number>(0);
+
+  const [editingItemType, setEditingItemType] = useState<'frame' | 'crystal' | null>(null);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingItemPrice, setEditingItemPrice] = useState<number>(0);
+  const [editingItemDesc, setEditingItemDesc] = useState<string>('');
+
+  // Authentication Fields Input
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [registerUsername, setRegisterUsername] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [registerFullName, setRegisterFullName] = useState('');
+  const [registerRole, setRegisterRole] = useState<'Administrador' | 'Vendedor'>('Vendedor');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+
+  // Subsettings state inside Database layout: 'postgres' | 'catalogs' | 'theme'
+  const [dbSubTab, setDbSubTab] = useState<'postgres' | 'catalogs' | 'theme'>('postgres');
+
   // Navigation
   // Tabs: 'dashboard' | 'cotizador' | 'crm' | 'database'
   const [currentTab, setCurrentTab] = useState<'dashboard' | 'cotizador' | 'crm' | 'database'>('dashboard');
-  const [currentUser, setCurrentUser] = useState<string>('Estefany López');
-  const [currentUserRole, setCurrentUserRole] = useState<UserRole>(UserRole.Vendedor);
+  const [currentUser, setCurrentUser] = useState<string>(() => {
+    const saved = localStorage.getItem('logged_user');
+    return saved ? JSON.parse(saved).fullName : 'Estefany López';
+  });
+  const [currentUserRole, setCurrentUserRole] = useState<UserRole>(() => {
+    const saved = localStorage.getItem('logged_user');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return parsed.role === 'Administrador' ? UserRole.Administrador : UserRole.Vendedor;
+    }
+    return UserRole.Vendedor;
+  });
 
   // 2. POS Quote Builder Inline Form State
   const [clientName, setClientName] = useState('');
@@ -162,8 +229,25 @@ export default function App() {
       const logsRes = await fetch('/api/logs');
       const logsData = await logsRes.json();
       setLogs(logsData);
+
+      // Fetch real database catalogs
+      const framesRes = await fetch('/api/catalog/frames');
+      const framesData = await framesRes.json();
+      setFrames(framesData.length > 0 ? framesData : mockFrames);
+
+      const crystalsRes = await fetch('/api/catalog/crystals');
+      const crystalsData = await crystalsRes.json();
+      setCrystals(crystalsData.length > 0 ? crystalsData : mockCrystals);
+
+      // Fetch active CRM reminders alerts
+      const remindersRes = await fetch('/api/reminders');
+      const remindersData = await remindersRes.json();
+      setReminders(remindersData);
     } catch (e) {
-      console.error("API Fetch error, utilizing Client state fallback:", e);
+      console.warn("API Fetch error, utilizing Client state fallback:", e);
+      // Fallbacks
+      setFrames(mockFrames);
+      setCrystals(mockCrystals);
     }
   };
 
@@ -235,6 +319,461 @@ export default function App() {
       console.error("API Log push failed:", err);
     }
   };
+
+  // 3.1 Notes CRM Timeline deletion ("eliminar si me equivoco")
+  const handleDeleteCrmNote = async (noteId: string) => {
+    if (!selectedQuoteForCrm) return;
+    
+    const confirmDelete = window.confirm("¿Está seguro de que desea eliminar esta nota comercial? Esta acción no se puede deshacer.");
+    if (!confirmDelete) return;
+
+    const updatedNotes = selectedQuoteForCrm.crmNotes.filter(n => n.id !== noteId);
+    const updatedQuote: Quote = {
+      ...selectedQuoteForCrm,
+      crmNotes: updatedNotes
+    };
+
+    // Update locally
+    const updatedQuotes = quotes.map(q => q.id === selectedQuoteForCrm.id ? updatedQuote : q);
+    setQuotes(updatedQuotes);
+    setSelectedQuoteForCrm(updatedQuote);
+    addLog("Eliminar Nota CRM", `Se eliminó una nota de la cotización ${selectedQuoteForCrm.quoteNumber}.`);
+
+    try {
+      await fetch(`/api/quotes/${selectedQuoteForCrm.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedQuote)
+      });
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to update notes on server:", err);
+    }
+  };
+
+  // 3.2 Program Follow-up Alarms & Reminders in the CRM
+  const handleCreateReminderAlert = async () => {
+    if (!selectedQuoteForCrm || !crmScheduleDate) {
+      alert("Por favor seleccione una fecha válida para programar la alerta de recordatorio.");
+      return;
+    }
+
+    const newReminder = {
+      id: `rem-${Date.now()}`,
+      quote_id: selectedQuoteForCrm.id,
+      client_name: selectedQuoteForCrm.clientName,
+      date: crmScheduleDate,
+      time: '09:00',
+      notes: crmScheduleNotes || `Llamada de seguimiento - Cotización ${selectedQuoteForCrm.quoteNumber}`,
+      completed: false
+    };
+
+    try {
+      // Create follow up timeline note in quote
+      const compiledNoteStr = `Alerta programada para el día ${crmScheduleDate}. Motivo: "${newReminder.notes}"`;
+      const newNote: CrmNote = {
+        id: `note-rem-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        user: currentUser,
+        details: compiledNoteStr,
+        interactionType: 'Otro'
+      };
+
+      const updatedQuote: Quote = {
+        ...selectedQuoteForCrm,
+        nextContactDate: crmScheduleDate,
+        nextActionNotes: newReminder.notes,
+        status: 'En Seguimiento',
+        crmNotes: [...selectedQuoteForCrm.crmNotes, newNote]
+      };
+
+      // update quotes client states
+      setQuotes(prev => prev.map(q => q.id === selectedQuoteForCrm.id ? updatedQuote : q));
+      setSelectedQuoteForCrm(updatedQuote);
+
+      // Save quote changes
+      await fetch(`/api/quotes/${selectedQuoteForCrm.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedQuote)
+      });
+
+      // Save follow-up alarm row
+      await fetch('/api/reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newReminder)
+      });
+
+      setCrmScheduleDate('');
+      setCrmScheduleNotes('');
+      addLog("Programar Alerta", `Se agendó recordatorio para ${selectedQuoteForCrm.clientName} en la fecha ${crmScheduleDate}`);
+      alert("¡Alerta de recordatorio agendada exitosamente en la base de datos de Óptica Dac!");
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to schedule alert on server:", err);
+      // Fallback
+      setReminders(prev => [newReminder, ...prev]);
+      alert("Alerta programada en memoria local del navegador.");
+    }
+  };
+
+  const handleDeleteReminder = async (id: string) => {
+    if (!window.confirm("¿Desea eliminar este recordatorio?")) return;
+    setReminders(prev => prev.filter(r => r.id !== id));
+    try {
+      await fetch(`/api/reminders/${id}`, { method: 'DELETE' });
+      addLog("Eliminar Recordatorio", `Recordatorio ID ${id} borrado.`);
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to delete reminder:", err);
+    }
+  };
+
+  const handleToggleReminderCompleted = async (id: string, completed: boolean) => {
+    setReminders(prev => prev.map(r => r.id === id ? { ...r, completed } : r));
+    try {
+      await fetch(`/api/reminders/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed })
+      });
+      fetchAllData();
+    } catch (e) {
+      console.error("Failed to toggle reminder status:", e);
+    }
+  };
+
+  // 3.3 Dynamic Frames & Crystals Catalog mutations
+  const handleCreateFrameCatalogItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFrameBrand.trim() || !newFrameModel.trim()) {
+      alert("Debe escribir marca y modelo de la montura.");
+      return;
+    }
+
+    const item: FrameTemplate = {
+      id: `mon-db-${Date.now()}`,
+      brand: newFrameBrand.trim(),
+      model: newFrameModel.trim(),
+      color: newFrameColor.trim() || 'Multicolor',
+      material: newFrameMaterial.trim() || 'Acetato',
+      price: Number(newFramePrice) || 0
+    };
+
+    try {
+      setFrames(prev => [item, ...prev]);
+      await fetch('/api/catalog/frames', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item)
+      });
+      
+      setNewFrameBrand('');
+      setNewFrameModel('');
+      setNewFrameColor('');
+      setNewFrameMaterial('');
+      setNewFramePrice(0);
+      addLog("Añadir Montura", `Nueva montura registrada en catálogo: ${item.brand} (S/ ${item.price})`);
+      alert("¡Montura registrada con éxito en el catálogo de Óptica Dac!");
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to save frame item:", err);
+    }
+  };
+
+  const handleCreateCrystalCatalogItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCrystalBrand.trim()) {
+      alert("Debe escribir la marca/especificación del cristal.");
+      return;
+    }
+
+    const item: CrystalTemplate = {
+      id: `lun-db-${Date.now()}`,
+      brand: newCrystalBrand.trim(),
+      type: newCrystalType,
+      material: newCrystalMaterial.trim() || 'Policarbonato',
+      price: Number(newCrystalPrice) || 0
+    };
+
+    try {
+      setCrystals(prev => [item, ...prev]);
+      await fetch('/api/catalog/crystals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item)
+      });
+
+      setNewCrystalBrand('');
+      setNewCrystalMaterial('');
+      setNewCrystalPrice(0);
+      addLog("Añadir Cristal", `Nuevo cristal registrado en catálogo: ${item.brand} (S/ ${item.price})`);
+      alert("¡Cristal terapéutico registrado con éxito!");
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to save crystal item:", err);
+    }
+  };
+
+  const handleUpdateFrameCatalogPrice = async (id: string, brand: string, model: string, color: string, material: string, price: number) => {
+    try {
+      setFrames(prev => prev.map(f => f.id === id ? { ...f, price, brand, model, color, material } : f));
+      await fetch(`/api/catalog/frames/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brand, model, color, material, price })
+      });
+      addLog("Modificar Montura", `Se actualizó precio de montura ID ${id} a S/ ${price}`);
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to update frame price:", err);
+    }
+  };
+
+  const handleUpdateCrystalCatalogPrice = async (id: string, brand: string, type: string, material: string, price: number) => {
+    try {
+      setCrystals(prev => prev.map(c => c.id === id ? { ...c, price, brand, type, material } : c));
+      await fetch(`/api/catalog/crystals/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brand, type, material, price })
+      });
+      addLog("Modificar Cristal", `Se actualizó precio de cristal ID ${id} a S/ ${price}`);
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to update crystal price:", err);
+    }
+  };
+
+  const handleDeleteFrameCatalog = async (id: string) => {
+    if (!window.confirm("¿Seguro de remover esta montura del catálogo de Óptica Dac?")) return;
+    setFrames(prev => prev.filter(f => f.id !== id));
+    try {
+      await fetch(`/api/catalog/frames/${id}`, { method: 'DELETE' });
+      addLog("Eliminar Montura", `Aro ID ${id} eliminado del catálogo.`);
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to delete catalog frame:", err);
+    }
+  };
+
+  const handleDeleteCrystalCatalog = async (id: string) => {
+    if (!window.confirm("¿Seguro de remover este cristal del catálogo?")) return;
+    setCrystals(prev => prev.filter(c => c.id !== id));
+    try {
+      await fetch(`/api/catalog/crystals/${id}`, { method: 'DELETE' });
+      addLog("Eliminar Cristal", `Cristal ID ${id} eliminado.`);
+      fetchAllData();
+    } catch (err) {
+      console.error("Failed to delete catalog crystal:", err);
+    }
+  };
+
+  // 3.4 Authentic User Login & Session Actions
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    if (!loginUsername.trim() || !loginPassword.trim()) {
+      setAuthError("Debe completar todos los datos para ingresar.");
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const userObj = { username: data.username, fullName: data.fullName, role: data.role };
+        setLoggedUser(userObj);
+        localStorage.setItem('logged_user', JSON.stringify(userObj));
+        
+        setCurrentUser(data.fullName);
+        setCurrentUserRole(data.role === 'Administrador' ? UserRole.Administrador : UserRole.Vendedor);
+        addLog("Inicio de Sesión", `Consola iniciada por el operador ${data.fullName}`);
+      } else {
+        const err = await res.json();
+        setAuthError(err.error || "Nombre de usuario o clave incorrectos.");
+      }
+    } catch (err) {
+      // Offline fallback
+      console.warn("Auth database inactive, running local fallback login", err);
+      const storedUsersRaw = localStorage.getItem('local_registered_users');
+      const usersList = storedUsersRaw ? JSON.parse(storedUsersRaw) : [];
+      
+      if (loginUsername === 'admin' && loginPassword === 'admin') {
+        const u = { username: 'admin', fullName: 'Administrador General', role: 'Administrador' };
+        setLoggedUser(u);
+        localStorage.setItem('logged_user', JSON.stringify(u));
+        setCurrentUser(u.fullName);
+        setCurrentUserRole(UserRole.Administrador);
+      } else {
+        const found = usersList.find((usr: any) => usr.username === loginUsername && usr.password === loginPassword);
+        if (found) {
+          const u = { username: found.username, fullName: found.fullName, role: found.role };
+          setLoggedUser(u);
+          localStorage.setItem('logged_user', JSON.stringify(u));
+          setCurrentUser(found.fullName);
+          setCurrentUserRole(found.role === 'Administrador' ? UserRole.Administrador : UserRole.Vendedor);
+        } else {
+          setAuthError("Usuario incorrecto o contraseña inválida (modo fallback offline).");
+        }
+      }
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthSuccess(null);
+    if (!registerUsername.trim() || !registerPassword.trim() || !registerFullName.trim()) {
+      setAuthError("Debe completar todos los campos del registro.");
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: registerUsername,
+          password: registerPassword,
+          fullName: registerFullName,
+          role: registerRole
+        })
+      });
+
+      if (res.ok) {
+        setAuthSuccess("¡Usuario registrado con éxito! Ya puede iniciar su sesión.");
+        setRegisterUsername('');
+        setRegisterPassword('');
+        setRegisterFullName('');
+        setAuthMode('login');
+      } else {
+        const err = await res.json();
+        setAuthError(err.error || "No se pudo crear la cuenta de usuario.");
+      }
+    } catch (err) {
+      console.warn("Auth saving offline, saving to localStorage client list", err);
+      const storedUsersRaw = localStorage.getItem('local_registered_users');
+      const usersList = storedUsersRaw ? JSON.parse(storedUsersRaw) : [];
+      
+      if (usersList.some((u: any) => u.username === registerUsername) || registerUsername === 'admin') {
+        setAuthError("Este nombre de usuario ya se encuentra ocupado.");
+        return;
+      }
+      
+      const newLocalUser = {
+        username: registerUsername,
+        password: registerPassword,
+        fullName: registerFullName,
+        role: registerRole
+      };
+      usersList.push(newLocalUser);
+      localStorage.setItem('local_registered_users', JSON.stringify(usersList));
+      setAuthSuccess("¡Cuenta registrada con éxito en el almacenamiento local offline!");
+      setRegisterUsername('');
+      setRegisterPassword('');
+      setRegisterFullName('');
+      setAuthMode('login');
+    }
+  };
+
+  const handleLogout = () => {
+    setLoggedUser(null);
+    localStorage.removeItem('logged_user');
+    addLog("Cierre de Sesión", `Sesión finalizada manualmente.`);
+  };
+
+  // Helper to map color theme selection to real tailwind color classes
+  const theme = useMemo(() => {
+    switch (themeColor) {
+      case 'emerald':
+        return {
+          primary: 'emerald-600',
+          bg: 'bg-emerald-600',
+          hoverBg: 'hover:bg-emerald-700',
+          text: 'text-emerald-600',
+          border: 'border-emerald-250',
+          accentBorder: 'border-emerald-500',
+          focusBorder: 'focus:border-emerald-500 font-bold',
+          accentBg: 'bg-emerald-50/70',
+          accentText: 'text-emerald-850',
+          badge: 'bg-emerald-100 text-emerald-800 font-bold',
+          button: 'bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold',
+          sidebarActive: 'bg-emerald-600 text-white shadow-md font-extrabold',
+          badgeIcon: 'text-emerald-500'
+        };
+      case 'amber':
+        return {
+          primary: 'amber-600',
+          bg: 'bg-amber-600',
+          hoverBg: 'hover:bg-amber-700',
+          text: 'text-amber-600',
+          border: 'border-amber-250',
+          accentBorder: 'border-amber-500',
+          focusBorder: 'focus:border-amber-500 font-bold',
+          accentBg: 'bg-amber-50/70',
+          accentText: 'text-amber-850',
+          badge: 'bg-amber-100 text-amber-800 font-bold',
+          button: 'bg-amber-600 hover:bg-amber-700 text-white font-extrabold',
+          sidebarActive: 'bg-amber-600 text-white shadow-md font-extrabold',
+          badgeIcon: 'text-amber-550'
+        };
+      case 'rose':
+        return {
+          primary: 'rose-600',
+          bg: 'bg-rose-600',
+          hoverBg: 'hover:bg-rose-700',
+          text: 'text-rose-600',
+          border: 'border-rose-250',
+          accentBorder: 'border-rose-500',
+          focusBorder: 'focus:border-rose-500 font-bold',
+          accentBg: 'bg-rose-50/70',
+          accentText: 'text-rose-850',
+          badge: 'bg-rose-100 text-rose-800 font-bold',
+          button: 'bg-rose-600 hover:bg-rose-700 text-white font-extrabold',
+          sidebarActive: 'bg-rose-600 text-white shadow-md font-extrabold',
+          badgeIcon: 'text-rose-500'
+        };
+      case 'slate':
+        return {
+          primary: 'slate-700',
+          bg: 'bg-slate-700',
+          hoverBg: 'hover:bg-slate-800',
+          text: 'text-slate-755',
+          border: 'border-slate-300',
+          accentBorder: 'border-slate-650',
+          focusBorder: 'focus:border-slate-650 font-bold',
+          accentBg: 'bg-slate-100/70',
+          accentText: 'text-slate-850',
+          badge: 'bg-slate-200 text-slate-800 font-bold',
+          button: 'bg-slate-700 hover:bg-slate-800 text-white font-extrabold',
+          sidebarActive: 'bg-slate-700 text-white shadow-md font-extrabold',
+          badgeIcon: 'text-slate-500'
+        };
+      default: // indigo
+        return {
+          primary: 'indigo-600',
+          bg: 'bg-indigo-600',
+          hoverBg: 'hover:bg-indigo-700',
+          text: 'text-indigo-600',
+          border: 'border-slate-200',
+          accentBorder: 'border-indigo-500',
+          focusBorder: 'focus:border-indigo-500 font-bold',
+          accentBg: 'bg-indigo-50/70',
+          accentText: 'text-indigo-850',
+          badge: 'bg-indigo-100 text-indigo-750 font-bold',
+          button: 'bg-indigo-600 hover:bg-indigo-750 text-white font-extrabold',
+          sidebarActive: 'bg-indigo-600 text-white shadow-md font-extrabold',
+          badgeIcon: 'text-indigo-500'
+        };
+    }
+  }, [themeColor]);
 
   // 4. Resolve frame descriptions dynamically
   const activeFrame = useMemo(() => {
@@ -652,8 +1191,167 @@ export default function App() {
     return result;
   }, [quotes, crmStatusFilter, searchQuery]);
 
+  if (!loggedUser) {
+    return (
+      <div className={`min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 relative font-theme-${themeFont} size-theme-${themeFontSize}`}>
+        {/* Dynamic abstract geometric background meshes */}
+        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-sky-500/5 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-8 relative z-10 space-y-6">
+          <div className="text-center space-y-2">
+            <div className="inline-flex w-14 h-14 bg-sky-500/10 rounded-2xl items-center justify-center border border-sky-500/20 mb-2">
+              <span className="font-serif font-black text-2xl text-sky-400">D</span>
+            </div>
+            <h1 className="text-2xl font-black text-white tracking-wider uppercase font-sans">ÓPTICA DAC</h1>
+            <p className="text-slate-400 text-xs font-medium uppercase tracking-widest font-mono">Panel de Acceso Comercial</p>
+          </div>
+
+          {authError && (
+            <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-semibold p-3.5 rounded-lg text-center leading-relaxed">
+              {authError}
+            </div>
+          )}
+
+          {authSuccess && (
+            <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold p-3.5 rounded-lg text-center leading-relaxed">
+              {authSuccess}
+            </div>
+          )}
+
+          {authMode === 'login' ? (
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Usuario de Acceso</label>
+                <input
+                  type="text"
+                  placeholder="admin"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  className="w-full bg-slate-950 text-white placeholder-slate-650 text-xs font-semibold p-3 rounded-lg border border-slate-800 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 transition-all font-mono"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Contraseña</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="w-full bg-slate-950 text-white placeholder-slate-650 text-xs font-semibold p-3 rounded-lg border border-slate-800 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 transition-all font-mono"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-xs uppercase tracking-wider rounded-lg shadow-lg hover:shadow-sky-500/10 active:scale-[0.99] transition-all cursor-pointer"
+              >
+                Iniciar Sesión Comercial
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('register');
+                    setAuthError(null);
+                    setAuthSuccess(null);
+                  }}
+                  className="text-slate-450 hover:text-white text-xs font-semibold transition-colors"
+                >
+                  ¿No tiene cuenta? <span className="text-sky-400 underline font-extrabold">Registrarse aquí</span>
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Nombre Completo</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Juan Pérez"
+                  value={registerFullName}
+                  onChange={(e) => setRegisterFullName(e.target.value)}
+                  className="w-full bg-slate-950 text-white placeholder-slate-650 text-xs font-semibold p-3 rounded-lg border border-slate-800 focus:outline-none focus:border-sky-500 transition-all"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Usuario de Acceso</label>
+                <input
+                  type="text"
+                  placeholder="e.g. jperez"
+                  value={registerUsername}
+                  onChange={(e) => setRegisterUsername(e.target.value)}
+                  className="w-full bg-slate-950 text-white placeholder-slate-650 text-xs font-semibold p-3 rounded-lg border border-slate-800 focus:outline-none focus:border-sky-500 transition-all font-mono"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Clave Privada</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={registerPassword}
+                  onChange={(e) => setRegisterPassword(e.target.value)}
+                  className="w-full bg-slate-950 text-white placeholder-slate-650 text-xs font-semibold p-3 rounded-lg border border-slate-800 focus:outline-none focus:border-sky-500 transition-all font-mono"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Rol de Oficina</label>
+                <select
+                  value={registerRole}
+                  onChange={(e: any) => setRegisterRole(e.target.value)}
+                  className="w-full bg-slate-950 text-white text-xs font-semibold p-3 rounded-lg border border-slate-800 focus:outline-none focus:border-sky-500 transition-all"
+                >
+                  <option value="Vendedor">Asesor de Ventas ({UserRole.Vendedor})</option>
+                  <option value="Administrador">Administrador General ({UserRole.Administrador})</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs uppercase tracking-wider rounded-lg shadow-lg hover:shadow-emerald-500/10 active:scale-[0.99] transition-all cursor-pointer"
+              >
+                Crear Nueva Cuenta
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                    setAuthSuccess(null);
+                  }}
+                  className="text-slate-450 hover:text-white text-xs font-semibold transition-colors"
+                >
+                  ¿Ya está registrado? <span className="text-sky-400 underline font-extrabold">Iniciar Sesión</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className="text-center shrink-0">
+            <span className="text-[8.5px] font-bold text-slate-500 block leading-normal uppercase font-mono tracking-widest">
+              * Acceso con base de datos sincronizada *<br />
+              <span className="text-[9.5px]">Credenciales por defecto: admin / admin</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-900 overflow-hidden no-print">
+    <div className={`flex h-screen w-full bg-slate-50 font-sans text-slate-900 overflow-hidden no-print font-theme-${themeFont} size-theme-${themeFontSize}`}>
       
       {/* ──────────────────────────────────────────────────────────────────
           SIDEBAR CONFIGURATION (Swiss geometric branding)
@@ -664,10 +1362,10 @@ export default function App() {
         <div className="p-6 pb-4">
           <div className="flex items-center gap-2.5 text-sky-450 font-bold text-xl tracking-tight">
             <div className="w-9 h-9 bg-sky-500/10 rounded-xl flex items-center justify-center border border-sky-5050/30">
-              <span className="font-serif text-sky-400 text-xl font-black">O</span>
+              <span className="font-serif text-sky-400 text-xl font-black">D</span>
             </div>
             <div className="flex flex-col">
-              <span className="font-sans font-black text-white tracking-widest text-base">OPTIVISION</span>
+              <span className="font-sans font-black text-white tracking-widest text-base">ÓPTICA DAC</span>
               <span className="text-[9px] text-slate-500 font-mono font-bold tracking-widest uppercase mb-1">CRM Cotizador</span>
             </div>
           </div>
@@ -675,26 +1373,22 @@ export default function App() {
 
         {/* User identification */}
         <div className="px-5 py-2">
-          <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-800 space-y-1 text-xs">
-            <div className="flex justify-between items-center text-slate-400 mb-1">
+          <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-800 space-y-1.5 text-xs">
+            <div className="flex justify-between items-center text-slate-400">
               <span className="text-[9px] uppercase font-bold text-slate-500 font-mono tracking-wider">Operador Actual</span>
-              <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
+              <span className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-pulse"></span>
             </div>
-            <p className="font-bold text-white uppercase">{currentUser}</p>
-            <select
-              value={currentUserRole}
-              onChange={(e) => {
-                const role = e.target.value as UserRole;
-                setCurrentUserRole(role);
-                setCurrentUser(role === UserRole.Administrador ? 'Juan Pérez' : 'Estefany López');
-                addLog('Cambio Perfil', `Firma del operador modificada a ${role}`);
-              }}
-              className="mt-1 w-full bg-slate-950 p-1 rounded border border-slate-700 text-[10px] text-sky-400 font-bold focus:outline-hidden"
-              id="role-switcher-dropdown"
+            <div>
+              <p className="font-bold text-white uppercase truncate text-sm">{currentUser}</p>
+              <p className="text-[9px] text-sky-450 font-mono uppercase font-bold tracking-wider">{currentUserRole}</p>
+            </div>
+            
+            <button
+              onClick={handleLogout}
+              className="mt-1 w-full bg-slate-900 border border-slate-700 hover:bg-slate-950 text-[10px] text-rose-400 hover:text-rose-500 font-bold p-1 rounded transition-colors text-center cursor-pointer"
             >
-              <option value={UserRole.Vendedor}>Asesor Comercial ({UserRole.Vendedor})</option>
-              <option value={UserRole.Administrador}>Administrador ({UserRole.Administrador})</option>
-            </select>
+              Cerrar Sesión
+            </button>
           </div>
         </div>
 
@@ -706,7 +1400,7 @@ export default function App() {
             onClick={() => setCurrentTab('dashboard')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
               currentTab === 'dashboard' 
-                ? 'bg-sky-600 text-white shadow-xs font-bold' 
+                ? theme.sidebarActive 
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
             id="nav-tab-dashboard"
@@ -719,7 +1413,7 @@ export default function App() {
             onClick={() => setCurrentTab('crm')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
               currentTab === 'crm' 
-                ? 'bg-sky-600 text-white shadow-xs font-bold' 
+                ? theme.sidebarActive 
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
             id="nav-tab-crm"
@@ -741,8 +1435,8 @@ export default function App() {
             onClick={() => setCurrentTab('cotizador')}
             className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-xs font-bold tracking-wider transition-all border border-dashed cursor-pointer ${
               currentTab === 'cotizador' 
-                ? 'bg-emerald-600 text-white border-emerald-500 shadow-md font-black scale-102' 
-                : 'text-emerald-400 hover:text-white hover:bg-emerald-950/20 border-emerald-950/50'
+                ? 'bg-sky-600 text-white border-sky-500 shadow-md font-black scale-102 animate-pulse' 
+                : 'text-sky-450 hover:text-white hover:bg-sky-950/20 border-sky-950/50'
             }`}
             id="nav-tab-cotizador"
           >
@@ -758,14 +1452,14 @@ export default function App() {
             onClick={() => setCurrentTab('database')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
               currentTab === 'database' 
-                ? 'bg-indigo-600 text-white shadow-xs font-bold' 
+                ? theme.sidebarActive 
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
             id="nav-tab-database"
           >
             <span className="flex items-center gap-3">
-              <Database className="w-4.5 h-4.5 text-indigo-400" />
-              Configurar Postgres Local
+              <Database className="w-4.5 h-4.5 opacity-80" />
+              Configuración y Catálogos
             </span>
             <span className={`w-2 h-2 rounded-full ${dbConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></span>
           </button>
@@ -1273,7 +1967,7 @@ export default function App() {
                     <div className="space-y-4">
                       <label className="text-[10px] font-bold text-slate-400 uppercase leading-none">Seleccionar de catálogo actual (autocompleta los campos de edición)</label>
                       <div className="grid grid-cols-3 gap-3">
-                        {mockFrames.map((f) => (
+                        {frames.map((f) => (
                           <div
                             key={f.id}
                             type="button"
@@ -1389,7 +2083,7 @@ export default function App() {
                     <div className="space-y-4">
                       <label className="text-[10px] font-bold text-slate-400 uppercase leading-none">Seleccionar de catálogo actual (autocompleta los campos de edición)</label>
                       <div className="grid grid-cols-3 gap-3">
-                        {mockCrystals.map((c) => (
+                        {crystals.map((c) => (
                           <div
                             key={c.id}
                             type="button"
@@ -2179,182 +2873,543 @@ export default function App() {
       )}
 
       {currentTab === 'database' && (
-        <div className="max-w-4xl mx-auto space-y-6 animate-fade-in text-left font-sans">
+        <div className="max-w-5xl mx-auto space-y-6 animate-fade-in text-left font-sans pb-12">
           {/* Header Card */}
           <div className="bg-white p-6 border border-slate-200 rounded-2xl shadow-sm flex items-center justify-between">
             <div className="space-y-1">
-              <span className="text-[10px] font-black tracking-widest text-indigo-600 block font-mono uppercase">CONECTIVIDAD CORPORATIVA</span>
-              <h2 className="text-xl font-bold text-slate-800 tracking-tight">Configuración de Conexión PostgreSQL Local</h2>
+              <span className="text-[10px] font-black tracking-widest text-sky-600 block font-mono uppercase">CONSOLA SOBERANA</span>
+              <h2 className="text-xl font-bold text-slate-800 tracking-tight">Panel de Control: Configuración, Catálogos y Diseño</h2>
               <p className="text-xs text-slate-500 max-w-xl">
-                Configure los parámetros de red y credenciales para conectar su sistema POS/CRM a PostgreSQL. El sistema creará automáticamente las tablas y esquemas necesarios si no existen.
+                Gestione la conexión a Postgres, actualice las descripciones y precios del catálogo de monturas y cristales, y personalice la apariencia visual de la planilla de Óptica Dac.
               </p>
             </div>
             <Database className="w-12 h-12 text-slate-300 stroke-1" />
           </div>
 
-          <div className="grid grid-cols-3 gap-6">
-            {/* Left form */}
-            <div className="col-span-2 bg-white p-6 border border-slate-200 rounded-2xl shadow-sm space-y-4">
-              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest font-mono">Formulario de Conexión</h3>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">Host / Dirección IP (e.g. localhost o 127.0.0.1)</label>
-                  <input 
-                    type="text" 
-                    value={dbHost} 
-                    onChange={(e) => setDbHost(e.target.value)} 
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 text-slate-800 font-medium" 
-                    placeholder="localhost"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">Puerto de postgres (e.g. 5432)</label>
-                  <input 
-                    type="text" 
-                    value={dbPort} 
-                    onChange={(e) => setDbPort(e.target.value)} 
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 font-mono text-slate-800 font-medium" 
-                    placeholder="5432"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">Base de Datos PostgreSQL</label>
-                  <input 
-                    type="text" 
-                    value={dbName} 
-                    onChange={(e) => setDbName(e.target.value)} 
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 font-mono text-slate-800 font-medium" 
-                    placeholder="optivision"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">Usuario de postgres</label>
-                  <input 
-                    type="text" 
-                    value={dbUser} 
-                    onChange={(e) => setDbUser(e.target.value)} 
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 text-slate-800 font-medium" 
-                    placeholder="postgres"
-                  />
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">Contraseña de Postgres</label>
-                  <input 
-                    type="password" 
-                    value={dbPassword} 
-                    onChange={(e) => setDbPassword(e.target.value)} 
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 font-mono text-slate-800 font-medium" 
-                    placeholder="Contraseña del usuario postgres"
-                  />
-                </div>
-                <div className="col-span-2 flex items-center gap-2 pt-2">
-                  <input 
-                    type="checkbox" 
-                    id="dbSsl"
-                    checked={dbSsl} 
-                    onChange={(e) => setDbSsl(e.target.checked)} 
-                    className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-                  />
-                  <label htmlFor="dbSsl" className="text-xs font-bold text-slate-500 select-none">Habilitar conexión segura (SSL/HTTPS fallback)</label>
-                </div>
-              </div>
+          {/* Horizontal subtabs selector */}
+          <div className="flex border-b border-slate-200 gap-2">
+            <button
+              onClick={() => setDbSubTab('postgres')}
+              className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                dbSubTab === 'postgres'
+                  ? `${theme.primary} border-current ${theme.text} font-black`
+                  : 'border-transparent text-slate-400 hover:text-slate-750'
+              }`}
+            >
+              🔌 Conexión Postgres SQL
+            </button>
 
-              <div className="flex gap-2.5 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={handleTestAndSaveDb}
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase rounded-xl tracking-wider shadow-sm transition-all cursor-pointer scale-100 active:scale-98"
-                >
-                  Guardar Configuración y Conectar
-                </button>
-              </div>
-            </div>
+            <button
+              onClick={() => setDbSubTab('catalogs')}
+              className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                dbSubTab === 'catalogs'
+                  ? `${theme.primary} border-current ${theme.text} font-black`
+                  : 'border-transparent text-slate-400 hover:text-slate-750'
+              }`}
+            >
+              👓 Catálogo de Monturas y Cristales
+            </button>
 
-            {/* Right details */}
-            <div className="space-y-6">
-              {/* Connection status card */}
-              <div className={`p-6 border rounded-2xl shadow-sm space-y-4 ${dbConnected ? 'bg-emerald-50/20 border-emerald-250' : 'bg-rose-50/25 border-rose-250'}`}>
-                <h4 className="text-[10px] font-black uppercase tracking-widest font-mono text-slate-400">ESTADO DE CONEXIÓN</h4>
-                
-                <div className="flex items-center gap-3">
-                  <div className={`w-3.5 h-3.5 rounded-full ${dbConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></div>
-                  <strong className={`font-black text-sm ${dbConnected ? 'text-emerald-800' : 'text-rose-800'}`}>
-                    {dbConnected ? 'CONECTADO Y ACTIVO' : 'SIN CONEXIÓN POSTGRES'}
-                  </strong>
-                </div>
-
-                <p className="text-[11.5px] text-slate-500 leading-normal">
-                  {dbConnected 
-                    ? 'La planilla POS está guardando y cargando todas las cotizaciones y bitácoras directamente en las tablas SQL de PostgreSQL.'
-                    : 'La planilla POS está ejecutándose con la memoria volátil del backend/navegador porque aún no se ha enlazado a PostgreSQL local.'}
-                </p>
-
-                {dbConnected && dbConfig && (
-                  <div className="text-xs p-3.5 bg-white/60 border border-emerald-200 rounded-xl space-y-1 block font-mono">
-                    <span className="block text-[8.5px] font-black text-emerald-600 uppercase font-mono">DATOS ACTIVOS:</span>
-                    <p className="font-mono text-[10px] font-bold text-slate-600">
-                      Host: {dbConfig.host}<br />
-                      Database: {dbConfig.database}<br />
-                      User: {dbConfig.user}
-                    </p>
-                  </div>
-                )}
-                
-                {!dbConnected && (
-                  <div className="text-xs p-3.5 bg-rose-50 border border-rose-150 rounded-xl space-y-1 block">
-                    <span className="block text-[8.5px] font-black text-rose-600 uppercase font-mono">MOTOR VOLÁTIL FALLBACK:</span>
-                    <p className="text-[10.5px] text-rose-700 leading-normal font-semibold">
-                      Los datos se guardan en estados temporales hasta que configure la conexión Postgres local.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Reset Fallback Button */}
-              <div className="bg-white p-5 border border-slate-200 rounded-2xl shadow-sm space-y-3">
-                <span className="text-[9px] uppercase font-black text-rose-600 tracking-wider">MANTENIMIENTO DEL SISTEMA</span>
-                <h4 className="text-xs font-black text-slate-700 uppercase">Vincular Base de Datos en Blanco</h4>
-                <p className="text-[11px] text-slate-500 leading-normal">
-                  Elimine la información temporal stored en la memoria volátil del backend para arrancar el sistema completamente libre de demostración.
-                </p>
-                <button
-                  type="button"
-                  onClick={handleClearFallbackData}
-                  className="w-full py-2 border border-rose-350 bg-rose-50/50 hover:bg-rose-50 text-rose-700 font-extrabold text-[10.5px] rounded-xl uppercase transition-colors cursor-pointer"
-                >
-                  Borrar Memoria Temporal
-                </button>
-              </div>
-
-              {/* SQL Schemas View */}
-              <div className="bg-slate-900 text-slate-350 p-4 rounded-2xl block space-y-2.5 text-left font-mono text-[9px] border border-slate-800 shadow-lg">
-                <span className="text-[8px] font-black uppercase text-indigo-400 block tracking-widest leading-none">ESQUEMAS SQL AUTO-GENERADOS</span>
-                <p className="leading-normal text-slate-400">El servidor genera automáticamente las siguientes tablas si no existen:</p>
-                <pre className="bg-slate-950 p-2.5 rounded-lg text-indigo-300 font-mono max-h-[140px] overflow-y-auto scrollbar-thin overflow-x-auto text-[8.5px] leading-relaxed">
-{`CREATE TABLE IF NOT EXISTS quotes (
-  id VARCHAR(100) PRIMARY KEY,
-  quote_number VARCHAR(100) UNIQUE,
-  client_name VARCHAR(255),
-  client_dni VARCHAR(50),
-  date VARCHAR(100),
-  total NUMERIC,
-  status VARCHAR(50),
-  data JSONB,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS action_logs (
-  id VARCHAR(100) PRIMARY KEY,
-  timestamp VARCHAR(100),
-  details TEXT,
-  data JSONB,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);`}
-                </pre>
-              </div>
-            </div>
+            <button
+              onClick={() => setDbSubTab('theme')}
+              className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
+                dbSubTab === 'theme'
+                  ? `${theme.primary} border-current ${theme.text} font-black`
+                  : 'border-transparent text-slate-400 hover:text-slate-755'
+              }`}
+            >
+              🎨 Temas, Fuentes y Letra
+            </button>
           </div>
+
+          {/* Render sub-tabs content */}
+          {dbSubTab === 'postgres' && (
+            <div className="grid grid-cols-3 gap-6">
+              {/* Left form */}
+              <div className="col-span-2 bg-white p-6 border border-slate-200 rounded-2xl shadow-sm space-y-4">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest font-mono">Formulario de Conexión</h3>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Host / Dirección IP (e.g. localhost o 127.0.0.1)</label>
+                    <input 
+                      type="text" 
+                      value={dbHost} 
+                      onChange={(e) => setDbHost(e.target.value)} 
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-sky-5050 text-slate-800 font-medium" 
+                      placeholder="localhost"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Puerto de postgres (e.g. 5432)</label>
+                    <input 
+                      type="text" 
+                      value={dbPort} 
+                      onChange={(e) => setDbPort(e.target.value)} 
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-sky-5050 font-mono text-slate-800 font-medium" 
+                      placeholder="5432"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Base de Datos PostgreSQL</label>
+                    <input 
+                      type="text" 
+                      value={dbName} 
+                      onChange={(e) => setDbName(e.target.value)} 
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-sky-5050 font-mono text-slate-800 font-medium" 
+                      placeholder="optivision"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Usuario de postgres</label>
+                    <input 
+                      type="text" 
+                      value={dbUser} 
+                      onChange={(e) => setDbUser(e.target.value)} 
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-sky-5050 text-slate-800 font-medium" 
+                      placeholder="postgres"
+                    />
+                  </div>
+                  <div className="space-y-1 col-span-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Contraseña de Postgres</label>
+                    <input 
+                      type="password" 
+                      value={dbPassword} 
+                      onChange={(e) => setDbPassword(e.target.value)} 
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-sky-5050 font-mono text-slate-800 font-medium" 
+                      placeholder="Contraseña del usuario postgres"
+                    />
+                  </div>
+                  <div className="col-span-2 flex items-center gap-2 pt-2">
+                    <input 
+                      type="checkbox" 
+                      id="dbSsl"
+                      checked={dbSsl} 
+                      onChange={(e) => setDbSsl(e.target.checked)} 
+                      className="w-4 h-4 text-sky-600 rounded focus:ring-sky-500"
+                    />
+                    <label htmlFor="dbSsl" className="text-xs font-bold text-slate-500 select-none">Habilitar conexión segura (SSL/HTTPS fallback)</label>
+                  </div>
+                </div>
+
+                <div className="flex gap-2.5 pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleTestAndSaveDb}
+                    className="flex-1 py-3 bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-xs uppercase rounded-xl tracking-wider shadow-sm transition-all cursor-pointer scale-100 active:scale-98"
+                  >
+                    Guardar Configuración y Conectar
+                  </button>
+                </div>
+              </div>
+
+              {/* Right details */}
+              <div className="space-y-6">
+                {/* Connection status card */}
+                <div className={`p-6 border rounded-2xl shadow-sm space-y-4 ${dbConnected ? 'bg-emerald-50/20 border-emerald-250' : 'bg-rose-50/25 border-rose-250'}`}>
+                  <h4 className="text-[10px] font-black uppercase tracking-widest font-mono text-slate-400">ESTADO DE CONEXIÓN</h4>
+                  
+                  <div className="flex items-center gap-3">
+                    <div className={`w-3.5 h-3.5 rounded-full ${dbConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></div>
+                    <strong className={`font-black text-sm ${dbConnected ? 'text-emerald-800' : 'text-rose-800'}`}>
+                      {dbConnected ? 'CONECTADO Y ACTIVO' : 'SIN CONEXIÓN POSTGRES'}
+                    </strong>
+                  </div>
+
+                  <p className="text-[11.5px] text-slate-500 leading-normal">
+                    {dbConnected 
+                      ? 'La planilla POS y CRM de Óptica Dac está guardando y cargando todas las cotizaciones y bitácoras directamente en las tablas SQL de PostgreSQL.'
+                      : 'La planilla POS está ejecutándose con la memoria volátil del backend/navegador porque aún no se ha enlazado a PostgreSQL local.'}
+                  </p>
+
+                  {dbConnected && dbConfig && (
+                    <div className="text-xs p-3.5 bg-white/60 border border-emerald-200 rounded-xl space-y-1 block font-mono">
+                      <span className="block text-[8.5px] font-black text-emerald-600 uppercase font-mono">DATOS ACTIVOS:</span>
+                      <p className="font-mono text-[10px] font-bold text-slate-600">
+                        Host: {dbConfig.host}<br />
+                        Database: {dbConfig.database}<br />
+                        User: {dbConfig.user}
+                      </p>
+                    </div>
+                  )}
+                  
+                  {!dbConnected && (
+                    <div className="text-xs p-3.5 bg-rose-50 border border-rose-150 rounded-xl space-y-1 block">
+                      <span className="block text-[8.5px] font-black text-rose-600 uppercase font-mono">MOTOR VOLÁTIL FALLBACK:</span>
+                      <p className="text-[10.5px] text-rose-700 leading-normal font-semibold">
+                        Los datos se guardan en estados temporales hasta que configure la conexión Postgres local.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Reset Fallback Button */}
+                <div className="bg-white p-5 border border-slate-200 rounded-2xl shadow-sm space-y-3">
+                  <span className="text-[9px] uppercase font-black text-rose-600 tracking-wider">MANTENIMIENTO DEL SISTEMA</span>
+                  <h4 className="text-xs font-black text-slate-700 uppercase">Restaurar Base de Datos en Blanco</h4>
+                  <p className="text-[11px] text-slate-500 leading-normal">
+                    Elimine la información temporal stored en la memoria volátil del backend para arrancar el sistema completamente libre de demostración.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleClearFallbackData}
+                    className="w-full py-2 border border-rose-350 bg-rose-50/50 hover:bg-rose-50 text-rose-700 font-extrabold text-[10.5px] rounded-xl uppercase transition-colors cursor-pointer"
+                  >
+                    Borrar Memoria Temporal
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {dbSubTab === 'catalogs' && (
+            <div className="grid grid-cols-2 gap-6 pb-6">
+              
+              {/* LUNAS / CRISTALES CATALOG EDITOR */}
+              <div className="bg-white p-6 border border-slate-200 rounded-xl shadow-xs space-y-5">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Catálogo de Cristales / Lunas</h3>
+                    <p className="text-[11px] text-slate-400">Configure las descripciones y precios de venta al público.</p>
+                  </div>
+                  <span className="text-[10px] bg-slate-100 text-slate-650 px-2 rounded-full font-mono font-bold">Total: {crystals.length}</span>
+                </div>
+
+                {/* Create new Glass input */}
+                <form onSubmit={handleCreateCrystalCatalogItem} className="bg-slate-50/50 p-4 border rounded-xl space-y-3">
+                  <h4 className="text-[10px] font-black text-indigo-600 uppercase tracking-wider font-mono">Registrar Nueva Luna / Cristal</h4>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-500">Marca / Especificación</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Rodenstock Antireflex"
+                        value={newCrystalBrand}
+                        onChange={(e) => setNewCrystalBrand(e.target.value)}
+                        className="w-full p-2 bg-white rounded-lg border text-xs text-slate-800 font-medium"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-500">Familia / Tipo</label>
+                      <select
+                        value={newCrystalType}
+                        onChange={(e) => setNewCrystalType(e.target.value as any)}
+                        className="w-full p-2 bg-white rounded-lg border text-xs text-slate-800"
+                      >
+                        <option value="Monofocal">Monofocal</option>
+                        <option value="Bifocal">Bifocal</option>
+                        <option value="Progresivo">Progresivo</option>
+                        <option value="Ocupacional">Ocupacional</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-500">Tratamiento / Material</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Policarbonato BlueProtect"
+                        value={newCrystalMaterial}
+                        onChange={(e) => setNewCrystalMaterial(e.target.value)}
+                        className="w-full p-2 bg-white rounded-lg border text-xs text-slate-800 font-medium"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-500">Precio Base de Venta (S/)</label>
+                      <input
+                        type="number"
+                        placeholder="240.00"
+                        value={newCrystalPrice || ''}
+                        onChange={(e) => setNewCrystalPrice(Number(e.target.value))}
+                        className="w-full p-2 bg-white rounded-lg border text-xs font-mono text-slate-800 font-medium"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full py-1.5 bg-slate-900 text-white font-extrabold text-[10.5px] uppercase tracking-wide rounded-md hover:bg-black transition-colors cursor-pointer"
+                  >
+                    Añadir Cristal al Catálogo de Óptica Dac
+                  </button>
+                </form>
+
+                {/* Crystals records edit list */}
+                <div className="space-y-2 max-h-[350px] overflow-y-auto scrollbar-thin pr-1">
+                  {crystals.map((c) => (
+                    <div key={c.id} className="p-3 border border-slate-200 rounded-xl flex items-center justify-between gap-3 bg-white text-xs hover:border-slate-350 transition-colors">
+                      <div className="space-y-1 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={c.brand}
+                            onChange={(e) => handleUpdateCrystalCatalogPrice(c.id, e.target.value, c.type, c.material, c.price)}
+                            className="font-bold text-slate-800 p-0.5 bg-transparent border-b border-dashed border-slate-300 focus:border-slate-400 focus:bg-slate-50 text-xs w-full focus:outline-none"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-450 font-medium font-mono">
+                          <span>Tipo: {c.type}</span>
+                          <span>Mat: {c.material}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] font-bold text-slate-400">S/</span>
+                          <input
+                            type="number"
+                            value={c.price}
+                            onChange={(e) => handleUpdateCrystalCatalogPrice(c.id, c.brand, c.type, c.material, Number(e.target.value))}
+                            className="w-16 p-1 border border-slate-200 text-center rounded text-xs font-mono font-extrabold text-indigo-650"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCrystalCatalog(c.id)}
+                          className="p-1 px-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded transition-colors cursor-pointer"
+                          title="Eliminar Cristal"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+              </div>
+
+              {/* MONTURAS EDITOR */}
+              <div className="bg-white p-6 border border-slate-200 rounded-xl shadow-xs space-y-5">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Catálogo de Monturas / Armazones</h3>
+                    <p className="text-[11px] text-slate-400">Añada modelos o reconfigure sus descripciones y precios.</p>
+                  </div>
+                  <span className="text-[10px] bg-slate-100 text-slate-650 px-2 rounded-full font-mono font-bold">Total: {frames.length}</span>
+                </div>
+
+                {/* Create new frame model input */}
+                <form onSubmit={handleCreateFrameCatalogItem} className="bg-slate-50/50 p-4 border rounded-xl space-y-3">
+                  <h4 className="text-[10px] font-black text-indigo-600 uppercase tracking-wider font-mono">Registrar Nueva Montura / Aro</h4>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-550">Marca de Montura</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Ray-Ban Oval"
+                        value={newFrameBrand}
+                        onChange={(e) => setNewFrameBrand(e.target.value)}
+                        className="w-full p-2 bg-white rounded-lg border text-xs text-slate-800 font-medium"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-550">Código / Modelo</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. RX5228"
+                        value={newFrameModel}
+                        onChange={(e) => setNewFrameModel(e.target.value)}
+                        className="w-full p-2 bg-white rounded-lg border text-xs text-slate-800 font-medium"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-550">Color de Acabado</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Negro Mate / Dorado"
+                        value={newFrameColor}
+                        onChange={(e) => setNewFrameColor(e.target.value)}
+                        className="w-full p-2 bg-white rounded-lg border text-xs text-slate-800 font-medium"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-550">Material / Estructura</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Titanio Flexible"
+                        value={newFrameMaterial}
+                        onChange={(e) => setNewFrameMaterial(e.target.value)}
+                        className="w-full p-2 bg-white rounded-lg border text-xs text-slate-800 font-medium"
+                      />
+                    </div>
+
+                    <div className="space-y-1 col-span-2">
+                      <label className="text-[9px] font-bold text-slate-550">Precio Base de Venta (S/)</label>
+                      <input
+                        type="number"
+                        placeholder="199.00"
+                        value={newFramePrice || ''}
+                        onChange={(e) => setNewFramePrice(Number(e.target.value))}
+                        className="w-full p-2 bg-white rounded-lg border text-xs font-mono text-slate-800 font-medium"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full py-1.5 bg-slate-900 text-white font-extrabold text-[10.5px] uppercase tracking-wide rounded-md hover:bg-black transition-colors cursor-pointer"
+                  >
+                    Añadir Montura al Catálogo de Óptica Dac
+                  </button>
+                </form>
+
+                {/* List frames editor */}
+                <div className="space-y-2 max-h-[350px] overflow-y-auto scrollbar-thin pr-1">
+                  {frames.map((f) => (
+                    <div key={f.id} className="p-3 border border-slate-200 rounded-xl flex items-center justify-between gap-3 bg-white text-xs hover:border-slate-350 transition-colors">
+                      <div className="space-y-1 flex-1">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={f.brand}
+                            onChange={(e) => handleUpdateFrameCatalogPrice(f.id, e.target.value, f.model, f.color, f.material, f.price)}
+                            className="font-bold text-slate-800 p-0.5 bg-transparent border-b border-dashed border-slate-300 focus:border-slate-400 focus:bg-slate-50 text-xs w-full focus:outline-none"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-450 font-medium">
+                          <span>Cod: {f.model}</span>
+                          <span>Col: {f.color}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] font-bold text-slate-400">S/</span>
+                          <input
+                            type="number"
+                            value={f.price}
+                            onChange={(e) => handleUpdateFrameCatalogPrice(f.id, f.brand, f.model, f.color, f.material, Number(e.target.value))}
+                            className="w-16 p-1 border border-slate-200 text-center rounded text-xs font-mono font-extrabold text-indigo-650"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteFrameCatalog(f.id)}
+                          className="p-1 px-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded transition-colors cursor-pointer"
+                          title="Eliminar Montura"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+              </div>
+
+            </div>
+          )}
+
+          {dbSubTab === 'theme' && (
+            <div className="bg-white p-8 border border-slate-200 rounded-2xl shadow-sm space-y-6">
+              <div>
+                <span className="text-[9px] uppercase font-black text-indigo-600 font-mono tracking-widest block font-mono">INTEGRACIÓN VISUAL MODERNA</span>
+                <h3 className="text-base font-bold text-slate-800">Diseño Corporativo de Óptica Dac</h3>
+                <p className="text-xs text-slate-400">Ajuste la planilla para que responda a sus preferencias corporativas de legibilidad comercial y visuales.</p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-8">
+                
+                {/* COLOR THEMES */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-black uppercase text-slate-400 font-mono border-b pb-1">1. Temas de Color</h4>
+                  <div className="flex flex-col gap-2.5">
+                    {[
+                      { id: 'indigo', label: 'Indigo / Tecnológico', bg: 'bg-indigo-600' },
+                      { id: 'emerald', label: 'Esmeralda / Clínico', bg: 'bg-emerald-600' },
+                      { id: 'amber', label: 'Ámbar / Cálido Editorial', bg: 'bg-amber-500' },
+                      { id: 'rose', label: 'Rosado / Moderno', bg: 'bg-rose-500' },
+                      { id: 'slate', label: 'Slate / Swiss Modern', bg: 'bg-slate-700' }
+                    ].map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          setThemeColor(c.id as any);
+                          localStorage.setItem('theme_color', c.id);
+                          addLog('Cambio de Color', `Tema de color cambiado a ${c.id}`);
+                        }}
+                        className={`w-full p-2.5 rounded-xl border text-left text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                          themeColor === c.id 
+                            ? 'border-indigo-500 bg-indigo-50/20 font-extrabold text-indigo-950 shadow-xs'
+                            : 'border-slate-200 hover:border-slate-300 bg-slate-50/20'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className={`w-3.5 h-3.5 rounded-full ${c.bg}`}></span>
+                          {c.label}
+                        </span>
+                        {themeColor === c.id && <span className="text-indigo-600 font-black">✓</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* FONTS OPTIONS */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-black uppercase text-slate-400 font-mono border-b pb-1">2. Estilos de Tipografía</h4>
+                  <div className="flex flex-col gap-2.5">
+                    {[
+                      { id: 'sans', label: 'Inter (Legible y Técnico)', d: 'font-sans' },
+                      { id: 'grotesk', label: 'Space Grotesk (Suizo)', d: 'font-grotesk' },
+                      { id: 'outfit', label: 'Outfit (Elegante)', d: 'font-outfit' },
+                      { id: 'serif', label: 'Playfair Display (Premium)', d: 'font-serif' }
+                    ].map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => {
+                          setThemeFont(f.id as any);
+                          localStorage.setItem('theme_font', f.id);
+                          addLog('Cambio de Tipografía', `Estilo tipográfico actualizado a ${f.id}`);
+                        }}
+                        className={`w-full p-2.5 rounded-xl border text-left text-xs font-semibold flex flex-col transition-all cursor-[#pointer] ${
+                          themeFont === f.id
+                            ? 'border-indigo-500 bg-indigo-50/20 font-extrabold text-slate-900 shadow-xs'
+                            : 'border-slate-200 hover:border-slate-300 bg-slate-50/20'
+                        }`}
+                      >
+                        <span className={`${f.d} font-black text-sm tracking-tight`}>{f.label}</span>
+                        <span className="text-[10px] text-slate-400 mt-0.5 leading-none">Lorem ipsum 123 óptica</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* FONT SIZES */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-black uppercase text-slate-400 font-mono border-b pb-1">3. Escala Letra (Size)</h4>
+                  <div className="flex flex-col gap-2.5">
+                    {[
+                      { id: 'normal', label: 'Letra Normal (Legibilidad Standard)' },
+                      { id: 'large', label: 'Letra Grande (Ideal para Pantallas POS)' },
+                      { id: 'xlarge', label: 'Letra Muy Grande (Máxima Accesibilidad)' }
+                    ].map((sz) => (
+                      <button
+                        key={sz.id}
+                        onClick={() => {
+                          setThemeFontSize(sz.id as any);
+                          localStorage.setItem('theme_font_size', sz.id);
+                          addLog('Escala de Letra', `Escala visual de letra cambiada a ${sz.id}`);
+                        }}
+                        className={`w-full p-2.5 rounded-xl border text-left text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                          themeFontSize === sz.id
+                            ? 'border-indigo-500 bg-indigo-50/20 font-extrabold text-indigo-950 shadow-xs'
+                            : 'border-slate-200 hover:border-slate-300 bg-slate-50/20'
+                        }`}
+                      >
+                        <span>{sz.label}</span>
+                        {themeFontSize === sz.id && <span className="text-indigo-600 font-black">✓</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+          )}
+
         </div>
       )}
 

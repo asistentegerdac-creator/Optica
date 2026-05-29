@@ -1,10 +1,35 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Playfair+Display:ital,wght@0,600;1,400&family=Outfit:wght@400;600;800&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Space Grotesk", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Theme Font classes */
+.font-theme-sans {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+}
+.font-theme-grotesk {
+  font-family: "Space Grotesk", sans-serif !important;
+}
+.font-theme-serif {
+  font-family: "Playfair Display", serif !important;
+}
+.font-theme-outfit {
+  font-family: "Outfit", sans-serif !important;
+}
+
+/* User font-size scaling helper */
+.size-theme-normal {
+  font-size: 100%;
+}
+.size-theme-large {
+  font-size: 110%;
+}
+.size-theme-xlarge {
+  font-size: 122%;
 }
 
 @layer utilities {
